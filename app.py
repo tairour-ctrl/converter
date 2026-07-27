@@ -80,31 +80,42 @@ def parse_post(post_text, file_text=""):
     if title_match:
         data["대리점명"] = title_match.group(1).strip()
         team_person = title_match.group(2).strip()
-        
-        # '○○팀 이름' 구문을 파싱해서 영업팀과 하나A로 분리
-        tp_match = re.search(r"([가-힇0-9A-Za-z]+팀)\s*([가-힇A-Za-z]{2,5})", team_person)
+
+        tp_match = re.search(
+            r"([가-힇0-9A-Za-z]+팀)\s*([가-힇A-Za-z]{2,5})", team_person
+        )
         if tp_match:
             data["영업팀"] = tp_match.group(1).strip()
             data["하나A"] = tp_match.group(2).strip()
         else:
             data["영업팀"] = team_person
-            
+
         data["유형"] = title_match.group(3).strip()
 
-    # 3. 본문 전체에서도 '~팀 이름' 형태 감지 (제목에서 못 찾았을 경우 대비)
+    # 3. 영업팀 / 하나A 본문 보완
     if not data["영업팀"] or not data["하나A"]:
-        body_tp = re.search(r"([가-힇0-9A-Za-z]+팀)\s*([가-힇A-Za-z]{2,5})", post_text)
+        body_tp = re.search(
+            r"([가-힇0-9A-Za-z]+팀)\s*([가-힇A-Za-z]{2,5})", post_text
+        )
         if body_tp:
             if not data["영업팀"]:
                 data["영업팀"] = body_tp.group(1).strip()
             if not data["하나A"]:
                 data["하나A"] = body_tp.group(2).strip()
 
-    # 4. 본문 주요 패턴 추출
+    # 4. A코드 추출 (A+숫자4자리 또는 PH+숫자5자리 영문자 포함 통째로 추출)
+    a_code_match = re.search(
+        r"(A\d{4}|PH\d{5})", post_text, re.IGNORECASE
+    )
+    if a_code_match:
+        data["A코드"] = a_code_match.group(1).upper()
+    else:
+        data["A코드"] = ""
+
+    # 5. 본문 주요 패턴 추출
     patterns = {
-        "A코드": r"(?:1\.\s*A코드|A코드)[^\n:]*[:\s]*([^\n]+)",
         "대리점명_본문": r"(?:2\.\s*상호명|상호명|상호)[^\n:]*[:\s]*([^\n]+)",
-        "대표자명": r"(?:3\.\s*대표자\s*이름|대표자\s*성명|대표자)[^\n:]*[:\s]*([^\n]+)",
+        "대표자명": r"(?:3\.\s*대표자\s*이름|대표자\s*성명|대표자|성명)[^\n:]*[:\s]*([가-힇]{2,5})",
         "사업자번호": r"(?:5\.\s*사업자등록번호|사업자등록번호|사업자번호)[^\n:]*[:\s]*([^\n]+)",
         "법인 번호": r"(?:10\.\s*법인등록번호|법인등록번호|법인번호)[^\n:]*[:\s]*([^\n]+)",
         "전화번호": r"(?:6\.\s*사업장\s*대표\s*전화번호|전화번호|TEL)[^\n:]*[:\s]*([^\n]+)",
@@ -122,11 +133,6 @@ def parse_post(post_text, file_text=""):
                 val = ""
             if key == "대리점명_본문" and not data["대리점명"]:
                 data["대리점명"] = val
-            elif key == "A코드":
-                val_clean = re.sub(
-                    r"신규\s*생성|\(택\s*1\)", "", val, flags=re.IGNORECASE
-                ).strip()
-                data["A코드"] = val_clean
             elif key != "대리점명_본문":
                 data[key] = val
 
@@ -135,11 +141,11 @@ def parse_post(post_text, file_text=""):
     elif "타사" in data["DTI"]:
         data["DTI"] = "타사"
 
-    # 핸드폰번호 및 계좌번호는 수기 작성을 위해 무조건 공란 처리
+    # 핸드폰번호 및 계좌번호 수기 작성을 위한 공란 처리
     data["핸드폰번호"] = ""
     data["계좌번호"] = ""
 
-    # 5. 첨부파일(사업자등록증 등)이 업로드된 경우 추출값 보완
+    # 6. 첨부파일(사업자등록증 등)이 업로드된 경우 추출값 보완
     if file_text.strip():
         # 사업자등록번호 추출 (xxx-xx-xxxxx)
         biz_match = re.search(r"\d{3}\s*-\s*\d{2}\s*-\s*\d{5}", file_text)
@@ -151,9 +157,9 @@ def parse_post(post_text, file_text=""):
         if corp_match:
             data["법인 번호"] = re.sub(r"\s+", "", corp_match.group(0))
 
-        # 대표자명 추출 (성명/대표자 키워드)
+        # 대표자명 추출 (성명/대표자 키워드 뒤 한글 이름)
         rep_match = re.search(
-            r"(?:성\s*명|대\s*표\s*자)\s*[:\s]*([가-힇]{2,4})", file_text
+            r"(?:성\s*명|대\s*표\s*자)\s*[:\s]*([가-힇]{2,5})", file_text
         )
         if rep_match:
             data["대표자명"] = rep_match.group(1).strip()
