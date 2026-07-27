@@ -18,7 +18,6 @@ st.caption(
 # ─────────────────────────────────────────────
 # OCR 전처리 (cv2 없이 Pillow만 사용 → Streamlit Cloud 배포 안정)
 # 그레이스케일 → 2배 업스케일 → Otsu 자동 임계값 이진화
-# ※ 고정 임계값이 아닌 히스토그램 기반 Otsu라 조명 편차에 강함
 # ─────────────────────────────────────────────
 def _otsu_threshold(gray_img):
     hist = gray_img.histogram()[:256]
@@ -48,6 +47,28 @@ def preprocess_for_ocr(img):
     g = g.resize((g.width * 2, g.height * 2), Image.LANCZOS)  # 2배 업스케일
     thr = _otsu_threshold(g)  # Otsu 자동 임계값
     return g.point(lambda x: 0 if x < thr else 255, mode="1")  # 이진화
+
+
+# ─────────────────────────────────────────────
+# 유형 정규화: 다양한 표기를 3가지로 통일
+#   신규/신규개설/신규등록 → 신규등록
+#   거래재개/재등록/재개    → 거래재개
+#   대표변경/대표자변경     → 대표변경
+#   그 외(폐업/정보변경 등) → 원본 유지 (무손실)
+# 우선순위: 대표변경 > 거래재개 > 신규 (특정적인 것부터)
+# ─────────────────────────────────────────────
+def normalize_type(raw):
+    if not raw:
+        return ""
+    orig = raw.strip()
+    t = re.sub(r"\s+", "", orig)  # 매칭용: 내부 공백 제거("재 등록" 대응)
+    if "대표변경" in t or "대표자변경" in t or ("대표" in t and "변경" in t):
+        return "대표변경"
+    if "거래재개" in t or "재등록" in t or "재개" in t:
+        return "거래재개"
+    if "신규" in t:
+        return "신규등록"
+    return orig  # 규칙에 없으면 원본 유지
 
 
 def extract_files_text(uploaded_files):
@@ -131,6 +152,7 @@ def parse_post(post_text, file_text=""):
             data["영업팀"] = team_person
 
         data["유형"] = title_match.group(3).strip()
+        data["유형"] = normalize_type(data["유형"])  # ← 유형 정규화
 
     # 3. 영업팀 / 하나A 본문 보완
     if not data["영업팀"] or not data["하나A"]:
@@ -153,7 +175,7 @@ def parse_post(post_text, file_text=""):
     # 5. 본문 주요 패턴 추출
     #    - '주소': 제네릭 '주소' 토큰 제거(→ '이메일 주소' 오매칭 방지),
     #             구체 라벨만 사용 + 다음 번호항목 전까지 여러 줄 캡처
-    #    - '업태' / '업종': 신규 추가
+    #    - '업태' / '업종': 추가
     patterns = {
         "대리점명_본문": r"(?:2\.\s*상호명|상호명|상호)[^\n:]*[:\s]*([^\n]+)",
         "사업자번호": r"(?:5\.\s*사업자등록번호|사업자등록번호|사업자번호)[^\n:]*[:\s]*([^\n]+)",
