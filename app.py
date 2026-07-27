@@ -86,10 +86,13 @@ def parse_post(post_text, file_text=""):
             data["영업팀"] = team_person
         data["유형"] = title_match.group(3).strip()
 
+    # 각 항목별 정규식 패턴 지정
     patterns = {
         "A코드": r"1\.\s*A코드[^\n:]*[:\s]*([^\n]+)",
         "대리점명_본문": r"2\.\s*상호명[^\n:]*[:\s]*([^\n]+)",
         "대표자명": r"3\.\s*대표자\s*이름[^\n:]*[:\s]*([^\n]+)",
+        # '대표자의 개인 명의 핸드폰 번호...' 등 핸드폰 관련 긴 문구 뒤의 값까지 감지
+        "핸드폰번호": r"(?:4\.|대표자[^\n:]*?)?(?:핸드폰|휴대폰|연락처)[^\n:]*[:\s]*([^\n]+)",
         "사업자번호": r"5\.\s*사업자등록번호[^\n:]*[:\s]*([^\n]+)",
         "전화번호": r"6\.\s*사업장\s*대표\s*전화번호[^\n:]*[:\s]*([^\n]+)",
         "팩스번호": r"7\.\s*사업장\s*FAX[^\n:]*[:\s]*([^\n]+)",
@@ -99,7 +102,7 @@ def parse_post(post_text, file_text=""):
     }
 
     for key, pattern in patterns.items():
-        match = re.search(pattern, post_text)
+        match = re.search(pattern, post_text, re.IGNORECASE)
         if match:
             val = match.group(1).strip()
             if val in ["없음", "X", "x", "-", "None"]:
@@ -119,7 +122,7 @@ def parse_post(post_text, file_text=""):
     elif "타사" in data["DTI"]:
         data["DTI"] = "타사"
 
-    # 첨부파일이 있는 경우: 대표자명, 사업자번호, 주소 3개 항목만 검증
+    # 대표자명, 사업자번호, 주소 3개 항목 교차검증
     if file_text.strip():
         clean_file_text = re.sub(r"\s+", "", file_text)
         verify_keys = ["대표자명", "사업자번호", "주소"]
@@ -128,7 +131,6 @@ def parse_post(post_text, file_text=""):
             val = data[key]
             if val:
                 clean_val = re.sub(r"[\s\-]", "", val)
-                # 도로명 주소의 경우 핵심 번기/도로명 위주 비교를 위해 특수문자 제거 후 검색
                 if clean_val not in clean_file_text:
                     data[key] = "X"
 
