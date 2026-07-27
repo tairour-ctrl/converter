@@ -71,7 +71,7 @@ def parse_post(post_text, file_text=""):
     if post_no_match:
         data["게시글 번호"] = post_no_match.group(1)
 
-    # 2. 제목 (대리점명 / 영업팀 / 하나A / 유형)
+    # 2. 제목 (대리점명 / 영업팀 하나A / 유형)
     title_match = re.search(
         r"^\d{7}\.\s*([^\n/]+)\s*/\s*([^\n/]+)\s*/\s*([^\n]+)",
         post_text,
@@ -80,15 +80,27 @@ def parse_post(post_text, file_text=""):
     if title_match:
         data["대리점명"] = title_match.group(1).strip()
         team_person = title_match.group(2).strip()
-        tp_match = re.match(r"(.+?팀)\s*(.+)", team_person)
+        
+        # '○○팀 이름' 구문을 파싱해서 영업팀과 하나A로 분리
+        tp_match = re.search(r"([가-힇0-9A-Za-z]+팀)\s*([가-힇A-Za-z]{2,5})", team_person)
         if tp_match:
             data["영업팀"] = tp_match.group(1).strip()
             data["하나A"] = tp_match.group(2).strip()
         else:
             data["영업팀"] = team_person
+            
         data["유형"] = title_match.group(3).strip()
 
-    # 3. 본문 주요 패턴 추출
+    # 3. 본문 전체에서도 '~팀 이름' 형태 감지 (제목에서 못 찾았을 경우 대비)
+    if not data["영업팀"] or not data["하나A"]:
+        body_tp = re.search(r"([가-힇0-9A-Za-z]+팀)\s*([가-힇A-Za-z]{2,5})", post_text)
+        if body_tp:
+            if not data["영업팀"]:
+                data["영업팀"] = body_tp.group(1).strip()
+            if not data["하나A"]:
+                data["하나A"] = body_tp.group(2).strip()
+
+    # 4. 본문 주요 패턴 추출
     patterns = {
         "A코드": r"(?:1\.\s*A코드|A코드)[^\n:]*[:\s]*([^\n]+)",
         "대리점명_본문": r"(?:2\.\s*상호명|상호명|상호)[^\n:]*[:\s]*([^\n]+)",
@@ -123,10 +135,11 @@ def parse_post(post_text, file_text=""):
     elif "타사" in data["DTI"]:
         data["DTI"] = "타사"
 
-    # 핸드폰번호는 수기 작성을 위해 공란
+    # 핸드폰번호 및 계좌번호는 수기 작성을 위해 무조건 공란 처리
     data["핸드폰번호"] = ""
+    data["계좌번호"] = ""
 
-    # 4. 첨부파일(사업자등록증 등)이 업로드된 경우 추출값 보완
+    # 5. 첨부파일(사업자등록증 등)이 업로드된 경우 추출값 보완
     if file_text.strip():
         # 사업자등록번호 추출 (xxx-xx-xxxxx)
         biz_match = re.search(r"\d{3}\s*-\s*\d{2}\s*-\s*\d{5}", file_text)
@@ -145,7 +158,7 @@ def parse_post(post_text, file_text=""):
         if rep_match:
             data["대표자명"] = rep_match.group(1).strip()
 
-        # 주소(소재지) 추출: 키워드 다음 줄이나 옆줄에서 한국 주소 형태 감지
+        # 주소(소재지) 추출
         addr_match = re.search(
             r"(?:소\s*재\s*지|주\s*소)[^\n:]*[:\s]*([^\n]+)", file_text
         )
