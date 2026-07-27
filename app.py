@@ -1,4 +1,3 @@
-import io
 import re
 import pandas as pd
 import streamlit as st
@@ -40,21 +39,57 @@ def validate_row(row):
         warnings.append(f"이메일 형식 오류 ({email})")
     return warnings
 
+def process_text_input(raw_text):
+    lines = [line.strip() for line in raw_text.strip().split("\n") if line.strip()]
+    if not lines:
+        return pd.DataFrame()
+    
+    data = []
+    headers = [h.strip() for h in lines[0].split("\t")]
+    
+    if len(lines) == 1 and not any(h in TARGET_COLUMNS for h in headers):
+        data.append([h.strip() for h in lines[0].split()])
+    else:
+        for line in lines:
+            parts = [p.strip() for p in line.split("\t")]
+            if len(parts) == 1:
+                parts = [p.strip() for p in line.split()]
+            data.append(parts)
+            
+    first_row = data[0]
+    matched_headers = sum(1 for item in first_row if item in TARGET_COLUMNS)
+    
+    if matched_headers >= 2:
+        df = pd.DataFrame(data[1:], columns=first_row)
+    else:
+        df = pd.DataFrame(data)
+        
+    return df
+
 st.set_page_config(page_title="데이터 가공 도구", layout="wide")
 st.title("엑셀 복사용 데이터 가공 도구")
 
-uploaded_file = st.file_uploader("파일 업로드 (Excel 또는 CSV)", type=["xlsx", "xls", "csv"])
+input_type = st.radio("입력 방식 선택", ["직접 텍스트 붙여넣기", "파일 업로드 (Excel/CSV)"])
 
-if uploaded_file is not None:
-    try:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file, dtype=str)
-        else:
-            df = pd.read_excel(uploaded_file, dtype=str)
-    except Exception as e:
-        st.error(f"파일 읽기 오류: {e}")
-        st.stop()
+df = pd.DataFrame()
 
+if input_type == "직접 텍스트 붙여넣기":
+    raw_input = st.text_area("데이터를 아래에 붙여넣으세요 (탭/공백 구분)", height=200)
+    if raw_input:
+        df = process_text_input(raw_input)
+else:
+    uploaded_file = st.file_uploader("파일 업로드 (Excel 또는 CSV)", type=["xlsx", "xls", "csv"])
+    if uploaded_file is not None:
+        try:
+            if uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file, dtype=str)
+            else:
+                df = pd.read_excel(uploaded_file, dtype=str)
+        except Exception as e:
+            st.error(f"파일 읽기 오류: {e}")
+            st.stop()
+
+if not df.empty:
     for col in TARGET_COLUMNS:
         if col not in df.columns:
             df[col] = ""
@@ -81,7 +116,8 @@ if uploaded_file is not None:
 
     tsv_data = df.to_csv(sep="\t", index=False)
 
-    st.subheader("가공 데이터")
+    st.subheader("가공 데이터 미리보기")
     st.dataframe(df)
 
-    st.text_area("엑셀 복사용 텍스트 (전체 선택 후 복사하여 엑셀에 붙여넣기)", value=tsv_data, height=300)
+    st.text_area("엑셀 복사용 결과 텍스트 (전체 선택 후 복사하여 엑셀에 붙여넣기)", value=tsv_data, height=250)
+    
