@@ -1,5 +1,7 @@
 import os
 import re
+import numpy as np
+import cv2
 from PIL import Image
 from pypdf import PdfReader
 import pytesseract
@@ -13,6 +15,17 @@ st.title("📄 하나투어 대리점 수신 게시글 TSV 변환기")
 st.caption(
     "게시글 본문과 첨부파일(사업자등록증 등)에서 정보를 정확히 추출합니다."
 )
+
+
+# ─────────────────────────────────────────────
+# OCR 전처리: 그레이스케일 → 2배 업스케일 → Otsu 이진화
+# 사업자등록증 같은 표/저해상도 스캔본의 한글 인식률을 크게 개선
+# ─────────────────────────────────────────────
+def preprocess_for_ocr(img):
+    g = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2GRAY)
+    g = cv2.resize(g, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    _, g = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    return g
 
 
 def extract_files_text(uploaded_files):
@@ -32,8 +45,13 @@ def extract_files_text(uploaded_files):
                         combined_text += extracted + "\n"
             elif ext in [".png", ".jpg", ".jpeg", ".bmp"]:
                 img = Image.open(file)
+                processed = preprocess_for_ocr(img)
+                # 표/블록 문서에는 psm 6 이 psm 3(기본)보다 안정적
                 combined_text += (
-                    pytesseract.image_to_string(img, lang="kor+eng") + "\n"
+                    pytesseract.image_to_string(
+                        processed, lang="kor+eng", config="--psm 6"
+                    )
+                    + "\n"
                 )
         except Exception as e:
             st.error(f"'{file.name}' 읽기 오류: {e}")
@@ -82,7 +100,7 @@ def parse_post(post_text, file_text=""):
         team_person = title_match.group(2).strip()
 
         tp_match = re.search(
-            r"([가-힇0-9A-Za-z]+팀)\s*([가-힇A-Za-z]{2,5})", team_person
+            r"([가-힣0-9A-Za-z]+팀)\s*([가-힣A-Za-z]{2,5})", team_person
         )
         if tp_match:
             data["영업팀"] = tp_match.group(1).strip()
@@ -95,7 +113,7 @@ def parse_post(post_text, file_text=""):
     # 3. 영업팀 / 하나A 본문 보완
     if not data["영업팀"] or not data["하나A"]:
         body_tp = re.search(
-            r"([가-힇0-9A-Za-z]+팀)\s*([가-힇A-Za-z]{2,5})", post_text
+            r"([가-힣0-9A-Za-z]+팀)\s*([가-힣A-Za-z]{2,5})", post_text
         )
         if body_tp:
             if not data["영업팀"]:
@@ -103,16 +121,17 @@ def parse_post(post_text, file_text=""):
             if not data["하나A"]:
                 data["하나A"] = body_tp.group(2).strip()
 
-    # 4. A코드 추출 (A+숫자4자리 또는 PH+숫자5자리 영문자 포함 통째로 추출)
-    a_code_match = re.search(
-        r"(A\d{4}|PH\d{5})", post_text, re.IGNORECASE
-    )
+    # 4. A코드 추출 (A+숫자4자리 또는 PH+숫자5자리)
+    a_code_match = re.search(r"(A\d{4}|PH\d{5})", post_text, re.IGNORECASE)
     if a_code_match:
         data["A코드"] = a_code_match.group(1).upper()
     else:
         data["A코드"] = ""
 
     # 5. 본문 주요 패턴 추출
+    #    - '주소': 제네릭 '주소' 토큰 제거(→ '이메일 주소' 오매칭 방지),
+    #             구체 라벨만 사용 + 다음 번호항목 전까지 여러 줄 캡처
+    #    - '업태' / '업종': 신규 추가
     patterns = {
         "대리점명_본문": r"(?:2\.\s*상호명|상호명|상호)[^\n:]*[:\s]*([^\n]+)",
         "사업자번호": r"(?:5\.\s*사업자등록번호|사업자등록번호|사업자번호)[^\n:]*[:\s]*([^\n]+)",
@@ -120,14 +139,18 @@ def parse_post(post_text, file_text=""):
         "전화번호": r"(?:6\.\s*사업장\s*대표\s*전화번호|전화번호|TEL)[^\n:]*[:\s]*([^\n]+)",
         "팩스번호": r"(?:7\.\s*사업장\s*FAX|팩스번호|FAX)[^\n:]*[:\s]*([^\n]+)",
         "이메일주소": r"(?:8\.\s*이메일\s*주소|이메일)[^\n:]*[:\s]*([^\n]+)",
-        "주소": r"(?:11\.\s*도로명\s*주소|도로명\s*주소|주소|소재지)[^\n:]*[:\s]*([^\n]+)",
+        "주소": r"(?:11\.\s*도로명\s*주소|도로명\s*주소|지번\s*주소|사업장\s*소재지|소\s*재\s*지)\s*[:\s]*(.+?)(?=\n\s*\d{1,2}\.|\Z)",
         "DTI": r"(?:12\.\s*계산서발행구분|계산서발행구분)[^\n:]*[:\s]*([^\n]+)",
+        "업태": r"(?:9\.\s*업태|업\s*태)\s*[:\s]*([^\n종]+)",
+        "업종": r"(?:업\s*종|종\s*목|종\s*류)\s*[:\s]*([^\n]+)",
     }
 
     for key, pattern in patterns.items():
-        match = re.search(pattern, post_text, re.IGNORECASE)
+        flags = re.IGNORECASE | (re.DOTALL if key == "주소" else 0)
+        match = re.search(pattern, post_text, flags)
         if match:
-            val = match.group(1).strip()
+            # 줄바꿈·중복 공백 정리 (여러 줄 주소를 한 줄로 병합)
+            val = re.sub(r"\s+", " ", match.group(1)).strip()
             if val in ["없음", "X", "x", "-", "None"]:
                 val = ""
             if key == "대리점명_본문" and not data["대리점명"]:
@@ -135,15 +158,15 @@ def parse_post(post_text, file_text=""):
             elif key != "대리점명_본문":
                 data[key] = val
 
-    # Representative (대표자명) 정밀 추출 (공개/비공개 제외 처리)
+    # 대표자명 정밀 추출 (공개/비공개 등 제외)
     rep_matches = re.findall(
-        r"(?:대표자|성명|대표자\s*이름|대표자\s*성명)[^\n:]*[:\s]*([가-힇A-Za-z\s]+)",
+        r"(?:대표자|성명|대표자\s*이름|대표자\s*성명)[^\n:]*[:\s]*([가-힣A-Za-z\s]+)",
         post_text,
         re.IGNORECASE,
     )
     for rep in rep_matches:
         cleaned_rep = re.sub(
-            r"공개|비공개|요청|\(개인정보\)|[^\n가-힇A-Za-z]", "", rep
+            r"공개|비공개|요청|$개인정보$|[^\n가-힣A-Za-z]", "", rep
         ).strip()
         if len(cleaned_rep) >= 2:
             data["대표자명"] = cleaned_rep
@@ -154,36 +177,47 @@ def parse_post(post_text, file_text=""):
     elif "타사" in data["DTI"]:
         data["DTI"] = "타사"
 
-    # 핸드폰번호 및 계좌번호 수기 작성을 위한 공란 처리
+    # 핸드폰번호 및 계좌번호는 수기 작성을 위한 공란 처리
     data["핸드폰번호"] = ""
     data["계좌번호"] = ""
 
-    # 6. 첨부파일(사업자등록증 등)이 업로드된 경우 추출값 보완
+    # 6. 첨부파일(사업자등록증 등) 업로드 시 추출값 보완
     if file_text.strip():
-        # 사업자등록번호 추출 (xxx-xx-xxxxx)
+        # 사업자등록번호 (xxx-xx-xxxxx)
         biz_match = re.search(r"\d{3}\s*-\s*\d{2}\s*-\s*\d{5}", file_text)
         if biz_match:
             data["사업자번호"] = re.sub(r"\s+", "", biz_match.group(0))
 
-        # 법인등록번호 추출 (xxxxxx-xxxxxxx)
+        # 법인등록번호 (xxxxxx-xxxxxxx)
         corp_match = re.search(r"\d{6}\s*-\s*\d{7}", file_text)
         if corp_match:
             data["법인 번호"] = re.sub(r"\s+", "", corp_match.group(0))
 
-        # 대표자명 보완 (성명/대표자 키워드 뒤 한글 이름)
+        # 대표자명 보완
         if not data["대표자명"]:
             rep_file_match = re.search(
-                r"(?:성\s*명|대\s*표\s*자)\s*[:\s]*([가-힇]{2,5})", file_text
+                r"(?:성\s*명|대\s*표\s*자)\s*[:\s]*([가-힣]{2,5})", file_text
             )
             if rep_file_match:
                 data["대표자명"] = rep_file_match.group(1).strip()
 
-        # 주소(소재지) 추출
+        # 업태 / 종목 (증명서 표에서 "업태 도소매 종목 여행업"처럼 나란히 등장)
+        ut = re.search(
+            r"업\s*태[:\s]*(.+?)\s*종\s*[목류][:\s]*([^\n]+)", file_text
+        )
+        if ut:
+            if not data["업태"]:
+                data["업태"] = re.sub(r"\s+", " ", ut.group(1)).strip()
+            if not data["업종"]:
+                data["업종"] = re.sub(r"\s+", " ", ut.group(2)).strip()
+
+        # 주소(소재지) — 라벨 종류 확대, '이메일 주소' 배제
         addr_match = re.search(
-            r"(?:소\s*재\s*지|주\s*소)[^\n:]*[:\s]*([^\n]+)", file_text
+            r"(?:사업장\s*소재지|본점\s*소재지|소\s*재\s*지|도로명\s*주소)\s*[:\s]*([^\n]+)",
+            file_text,
         )
         if addr_match:
-            addr_val = addr_match.group(1).strip()
+            addr_val = re.sub(r"\s+", " ", addr_match.group(1)).strip()
             if len(addr_val) > 5:
                 data["주소"] = addr_val
 
