@@ -9,9 +9,9 @@ st.set_page_config(
     page_title="하나투어 대리점 수신 게시글 TSV 변환기", layout="wide"
 )
 
-st.title("📄 하나투어 대리점 수신 게시글 TSV 교차검증 변환기")
+st.title("📄 하나투어 대리점 수신 게시글 TSV 변환기")
 st.caption(
-    "대표자명, 사업자번호, 주소 항목은 사업자등록증(첨부파일)에서 직접 추출합니다."
+    "게시글 본문과 첨부파일(사업자등록증 등)에서 정보를 정확히 추출합니다."
 )
 
 
@@ -66,10 +66,12 @@ def parse_post(post_text, file_text=""):
 
     data = {h: "" for h in headers}
 
+    # 1. 게시글 번호
     post_no_match = re.search(r"^(\d{7})\.", post_text, re.MULTILINE)
     if post_no_match:
         data["게시글 번호"] = post_no_match.group(1)
 
+    # 2. 제목 (대리점명 / 영업팀 / 하나A / 유형)
     title_match = re.search(
         r"^\d{7}\.\s*([^\n/]+)\s*/\s*([^\n/]+)\s*/\s*([^\n]+)",
         post_text,
@@ -86,16 +88,18 @@ def parse_post(post_text, file_text=""):
             data["영업팀"] = team_person
         data["유형"] = title_match.group(3).strip()
 
+    # 3. 본문 주요 패턴 추출
     patterns = {
-        "A코드": r"1\.\s*A코드[^\n:]*[:\s]*([^\n]+)",
-        "대리점명_본문": r"2\.\s*상호명[^\n:]*[:\s]*([^\n]+)",
-        "대표자명": r"3\.\s*대표자\s*이름[^\n:]*[:\s]*([^\n]+)",
-        "사업자번호": r"5\.\s*사업자등록번호[^\n:]*[:\s]*([^\n]+)",
-        "전화번호": r"6\.\s*사업장\s*대표\s*전화번호[^\n:]*[:\s]*([^\n]+)",
-        "팩스번호": r"7\.\s*사업장\s*FAX[^\n:]*[:\s]*([^\n]+)",
-        "이메일주소": r"8\.\s*이메일\s*주소[^\n:]*[:\s]*([^\n]+)",
-        "주소": r"11\.\s*도로명\s*주소[^\n:]*[:\s]*([^\n]+)",
-        "DTI": r"12\.\s*계산서발행구분[^\n:]*[:\s]*([^\n]+)",
+        "A코드": r"(?:1\.\s*A코드|A코드)[^\n:]*[:\s]*([^\n]+)",
+        "대리점명_본문": r"(?:2\.\s*상호명|상호명|상호)[^\n:]*[:\s]*([^\n]+)",
+        "대표자명": r"(?:3\.\s*대표자\s*이름|대표자\s*성명|대표자)[^\n:]*[:\s]*([^\n]+)",
+        "사업자번호": r"(?:5\.\s*사업자등록번호|사업자등록번호|사업자번호)[^\n:]*[:\s]*([^\n]+)",
+        "법인 번호": r"(?:10\.\s*법인등록번호|법인등록번호|법인번호)[^\n:]*[:\s]*([^\n]+)",
+        "전화번호": r"(?:6\.\s*사업장\s*대표\s*전화번호|전화번호|TEL)[^\n:]*[:\s]*([^\n]+)",
+        "팩스번호": r"(?:7\.\s*사업장\s*FAX|팩스번호|FAX)[^\n:]*[:\s]*([^\n]+)",
+        "이메일주소": r"(?:8\.\s*이메일\s*주소|이메일)[^\n:]*[:\s]*([^\n]+)",
+        "주소": r"(?:11\.\s*도로명\s*주소|도로명\s*주소|주소|소재지)[^\n:]*[:\s]*([^\n]+)",
+        "DTI": r"(?:12\.\s*계산서발행구분|계산서발행구분)[^\n:]*[:\s]*([^\n]+)",
     }
 
     for key, pattern in patterns.items():
@@ -119,32 +123,36 @@ def parse_post(post_text, file_text=""):
     elif "타사" in data["DTI"]:
         data["DTI"] = "타사"
 
-    # 핸드폰번호는 무조건 공란 유지 (수기 입력)
+    # 핸드폰번호는 수기 작성을 위해 공란
     data["핸드폰번호"] = ""
 
-    # 첨부파일(사업자등록증)이 업로드된 경우: 대표자명, 사업자번호, 주소를 파일에서 직접 추출
+    # 4. 첨부파일(사업자등록증 등)이 업로드된 경우 추출값 보완
     if file_text.strip():
-        # 1. 사업자등록번호 추출
+        # 사업자등록번호 추출 (xxx-xx-xxxxx)
         biz_match = re.search(r"\d{3}\s*-\s*\d{2}\s*-\s*\d{5}", file_text)
         if biz_match:
             data["사업자번호"] = re.sub(r"\s+", "", biz_match.group(0))
 
-        # 2. 대표자명 추출
+        # 법인등록번호 추출 (xxxxxx-xxxxxxx)
+        corp_match = re.search(r"\d{6}\s*-\s*\d{7}", file_text)
+        if corp_match:
+            data["법인 번호"] = re.sub(r"\s+", "", corp_match.group(0))
+
+        # 대표자명 추출 (성명/대표자 키워드)
         rep_match = re.search(
             r"(?:성\s*명|대\s*표\s*자)\s*[:\s]*([가-힇]{2,4})", file_text
         )
         if rep_match:
             data["대표자명"] = rep_match.group(1).strip()
 
-        # 3. 주소 추출
+        # 주소(소재지) 추출: 키워드 다음 줄이나 옆줄에서 한국 주소 형태 감지
         addr_match = re.search(
-            r"(?:소\s*재\s*지|주\s*소)\s*[:\s]*([가-힇0-9\s\(\)\-\,a-zA-Z]+)",
-            file_text,
+            r"(?:소\s*재\s*지|주\s*소)[^\n:]*[:\s]*([^\n]+)", file_text
         )
         if addr_match:
-            raw_addr = addr_match.group(1).split("\n")[0].strip()
-            if raw_addr:
-                data["주소"] = raw_addr
+            addr_val = addr_match.group(1).strip()
+            if len(addr_val) > 5:
+                data["주소"] = addr_val
 
     return data, headers
 
