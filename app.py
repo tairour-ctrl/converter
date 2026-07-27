@@ -90,7 +90,6 @@ def parse_post(post_text, file_text=""):
         "A코드": r"1\.\s*A코드[^\n:]*[:\s]*([^\n]+)",
         "대리점명_본문": r"2\.\s*상호명[^\n:]*[:\s]*([^\n]+)",
         "대표자명": r"3\.\s*대표자\s*이름[^\n:]*[:\s]*([^\n]+)",
-        "핸드폰번호": r"(?:4\.|대표자[^\n:]*?)?(?:핸드폰|휴대폰|연락처)[^\n:]*[:\s]*([^\n]+)",
         "사업자번호": r"5\.\s*사업자등록번호[^\n:]*[:\s]*([^\n]+)",
         "전화번호": r"6\.\s*사업장\s*대표\s*전화번호[^\n:]*[:\s]*([^\n]+)",
         "팩스번호": r"7\.\s*사업장\s*FAX[^\n:]*[:\s]*([^\n]+)",
@@ -120,27 +119,29 @@ def parse_post(post_text, file_text=""):
     elif "타사" in data["DTI"]:
         data["DTI"] = "타사"
 
+    # 핸드폰번호는 무조건 공란 유지 (수기 입력)
+    data["핸드폰번호"] = ""
+
     # 첨부파일(사업자등록증)이 업로드된 경우: 대표자명, 사업자번호, 주소를 파일에서 직접 추출
     if file_text.strip():
-        # 1. 사업자등록번호 추출 (xxx-xx-xxxxx 형식)
+        # 1. 사업자등록번호 추출
         biz_match = re.search(r"\d{3}\s*-\s*\d{2}\s*-\s*\d{5}", file_text)
         if biz_match:
             data["사업자번호"] = re.sub(r"\s+", "", biz_match.group(0))
 
-        # 2. 대표자명 추출 (성명/대표자 키워드 뒤의 이름)
+        # 2. 대표자명 추출
         rep_match = re.search(
             r"(?:성\s*명|대\s*표\s*자)\s*[:\s]*([가-힇]{2,4})", file_text
         )
         if rep_match:
             data["대표자명"] = rep_match.group(1).strip()
 
-        # 3. 주소 추출 (주소/사업장소재지 키워드 뒤의 긴 문장)
+        # 3. 주소 추출
         addr_match = re.search(
             r"(?:소\s*재\s*지|주\s*소)\s*[:\s]*([가-힇0-9\s\(\)\-\,a-zA-Z]+)",
             file_text,
         )
         if addr_match:
-            # 줄바꿈 정리하여 주소 가져오기
             raw_addr = addr_match.group(1).split("\n")[0].strip()
             if raw_addr:
                 data["주소"] = raw_addr
