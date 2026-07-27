@@ -1,7 +1,5 @@
 import os
 import re
-import numpy as np
-import cv2
 from PIL import Image
 from pypdf import PdfReader
 import pytesseract
@@ -18,14 +16,38 @@ st.caption(
 
 
 # ─────────────────────────────────────────────
-# OCR 전처리: 그레이스케일 → 2배 업스케일 → Otsu 이진화
-# 사업자등록증 같은 표/저해상도 스캔본의 한글 인식률을 크게 개선
+# OCR 전처리 (cv2 없이 Pillow만 사용 → Streamlit Cloud 배포 안정)
+# 그레이스케일 → 2배 업스케일 → Otsu 자동 임계값 이진화
+# ※ 고정 임계값이 아닌 히스토그램 기반 Otsu라 조명 편차에 강함
 # ─────────────────────────────────────────────
+def _otsu_threshold(gray_img):
+    hist = gray_img.histogram()[:256]
+    total = sum(hist)
+    if total == 0:
+        return 127
+    sum_all = sum(i * hist[i] for i in range(256))
+    sum_b, w_b, max_var, thr = 0, 0, 0, 127
+    for t in range(256):
+        w_b += hist[t]
+        if w_b == 0:
+            continue
+        w_f = total - w_b
+        if w_f == 0:
+            break
+        sum_b += t * hist[t]
+        m_b = sum_b / w_b
+        m_f = (sum_all - sum_b) / w_f
+        var = w_b * w_f * (m_b - m_f) ** 2
+        if var > max_var:
+            max_var, thr = var, t
+    return thr
+
+
 def preprocess_for_ocr(img):
-    g = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2GRAY)
-    g = cv2.resize(g, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    _, g = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-    return g
+    g = img.convert("L")  # 그레이스케일
+    g = g.resize((g.width * 2, g.height * 2), Image.LANCZOS)  # 2배 업스케일
+    thr = _otsu_threshold(g)  # Otsu 자동 임계값
+    return g.point(lambda x: 0 if x < thr else 255, mode="1")  # 이진화
 
 
 def extract_files_text(uploaded_files):
