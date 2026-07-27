@@ -86,13 +86,12 @@ def parse_post(post_text, file_text=""):
             data["영업팀"] = team_person
         data["유형"] = title_match.group(3).strip()
 
-    # 각 항목별 정규식 패턴 지정
+    # 핸드폰번호 및 기타 패턴 정리
     patterns = {
         "A코드": r"1\.\s*A코드[^\n:]*[:\s]*([^\n]+)",
         "대리점명_본문": r"2\.\s*상호명[^\n:]*[:\s]*([^\n]+)",
         "대표자명": r"3\.\s*대표자\s*이름[^\n:]*[:\s]*([^\n]+)",
-        # '대표자의 개인 명의 핸드폰 번호...' 등 핸드폰 관련 긴 문구 뒤의 값까지 감지
-        "핸드폰번호": r"(?:4\.|대표자[^\n:]*?)?(?:핸드폰|휴대폰|연락처)[^\n:]*[:\s]*([^\n]+)",
+        "핸드폰번호": r"4\.\s*(?:핸드폰|휴대폰|연락처)[^\n:]*[:\s]*([^\n]+)",
         "사업자번호": r"5\.\s*사업자등록번호[^\n:]*[:\s]*([^\n]+)",
         "전화번호": r"6\.\s*사업장\s*대표\s*전화번호[^\n:]*[:\s]*([^\n]+)",
         "팩스번호": r"7\.\s*사업장\s*FAX[^\n:]*[:\s]*([^\n]+)",
@@ -102,7 +101,7 @@ def parse_post(post_text, file_text=""):
     }
 
     for key, pattern in patterns.items():
-        match = re.search(pattern, post_text, re.IGNORECASE)
+        match = re.search(pattern, post_text)
         if match:
             val = match.group(1).strip()
             if val in ["없음", "X", "x", "-", "None"]:
