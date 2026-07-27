@@ -11,7 +11,7 @@ st.set_page_config(
 
 st.title("📄 하나투어 대리점 수신 게시글 TSV 교차검증 변환기")
 st.caption(
-    "대표자명, 사업자번호, 주소 항목만 첨부파일들과 비교하여 불일치 시 'X' 표시합니다."
+    "대표자명, 사업자번호, 주소 항목은 사업자등록증(첨부파일)에서 직접 추출합니다."
 )
 
 
@@ -86,12 +86,11 @@ def parse_post(post_text, file_text=""):
             data["영업팀"] = team_person
         data["유형"] = title_match.group(3).strip()
 
-    # 핸드폰번호 및 기타 패턴 정리
     patterns = {
         "A코드": r"1\.\s*A코드[^\n:]*[:\s]*([^\n]+)",
         "대리점명_본문": r"2\.\s*상호명[^\n:]*[:\s]*([^\n]+)",
         "대표자명": r"3\.\s*대표자\s*이름[^\n:]*[:\s]*([^\n]+)",
-        "핸드폰번호": r"4\.\s*(?:핸드폰|휴대폰|연락처)[^\n:]*[:\s]*([^\n]+)",
+        "핸드폰번호": r"(?:4\.|대표자[^\n:]*?)?(?:핸드폰|휴대폰|연락처)[^\n:]*[:\s]*([^\n]+)",
         "사업자번호": r"5\.\s*사업자등록번호[^\n:]*[:\s]*([^\n]+)",
         "전화번호": r"6\.\s*사업장\s*대표\s*전화번호[^\n:]*[:\s]*([^\n]+)",
         "팩스번호": r"7\.\s*사업장\s*FAX[^\n:]*[:\s]*([^\n]+)",
@@ -101,7 +100,7 @@ def parse_post(post_text, file_text=""):
     }
 
     for key, pattern in patterns.items():
-        match = re.search(pattern, post_text)
+        match = re.search(pattern, post_text, re.IGNORECASE)
         if match:
             val = match.group(1).strip()
             if val in ["없음", "X", "x", "-", "None"]:
@@ -121,17 +120,30 @@ def parse_post(post_text, file_text=""):
     elif "타사" in data["DTI"]:
         data["DTI"] = "타사"
 
-    # 대표자명, 사업자번호, 주소 3개 항목 교차검증
+    # 첨부파일(사업자등록증)이 업로드된 경우: 대표자명, 사업자번호, 주소를 파일에서 직접 추출
     if file_text.strip():
-        clean_file_text = re.sub(r"\s+", "", file_text)
-        verify_keys = ["대표자명", "사업자번호", "주소"]
+        # 1. 사업자등록번호 추출 (xxx-xx-xxxxx 형식)
+        biz_match = re.search(r"\d{3}\s*-\s*\d{2}\s*-\s*\d{5}", file_text)
+        if biz_match:
+            data["사업자번호"] = re.sub(r"\s+", "", biz_match.group(0))
 
-        for key in verify_keys:
-            val = data[key]
-            if val:
-                clean_val = re.sub(r"[\s\-]", "", val)
-                if clean_val not in clean_file_text:
-                    data[key] = "X"
+        # 2. 대표자명 추출 (성명/대표자 키워드 뒤의 이름)
+        rep_match = re.search(
+            r"(?:성\s*명|대\s*표\s*자)\s*[:\s]*([가-힇]{2,4})", file_text
+        )
+        if rep_match:
+            data["대표자명"] = rep_match.group(1).strip()
+
+        # 3. 주소 추출 (주소/사업장소재지 키워드 뒤의 긴 문장)
+        addr_match = re.search(
+            r"(?:소\s*재\s*지|주\s*소)\s*[:\s]*([가-힇0-9\s\(\)\-\,a-zA-Z]+)",
+            file_text,
+        )
+        if addr_match:
+            # 줄바꿈 정리하여 주소 가져오기
+            raw_addr = addr_match.group(1).split("\n")[0].strip()
+            if raw_addr:
+                data["주소"] = raw_addr
 
     return data, headers
 
@@ -139,7 +151,7 @@ def parse_post(post_text, file_text=""):
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("1. 첨부파일 업로드 (여러 개 가능)")
+    st.subheader("1. 첨부파일 업로드 (사업자등록증 등)")
     uploaded_files = st.file_uploader(
         "PDF, 이미지, TXT 파일을 여러 개 선택하거나 한번에 드래그하세요.",
         type=["pdf", "png", "jpg", "jpeg", "txt"],
@@ -152,7 +164,7 @@ with col2:
         "게시글 텍스트를 복사해서 붙여넣으세요.", height=200
     )
 
-if st.button("🔍 교차검증 및 TSV 데이터 생성", type="primary"):
+if st.button("🔍 데이터 추출 및 TSV 생성", type="primary"):
     if not post_text.strip():
         st.warning("게시글 본문 텍스트를 입력해 주세요.")
     else:
@@ -165,7 +177,7 @@ if st.button("🔍 교차검증 및 TSV 데이터 생성", type="primary"):
 
         tsv_output = "\t".join(headers) + "\n" + "\t".join(row)
 
-        st.success("변환 및 교차검증이 완료되었습니다!")
+        st.success("데이터 추출 및 변환이 완료되었습니다!")
 
         st.subheader("3. 결과 (복사하여 엑셀에 Ctrl+V 하세요)")
         st.text_area("TSV 결과", value=tsv_output, height=100)
